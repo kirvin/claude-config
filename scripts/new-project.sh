@@ -163,6 +163,13 @@ DOLT_DB_DIR="$SHARED_DOLT_DIR/$SLUG"
   "INSERT INTO config (\`key\`, value) VALUES ('issue_prefix', '$SLUG') \
    ON DUPLICATE KEY UPDATE value='$SLUG';" 2>/dev/null || true)
 echo "    Patched issue_prefix in Dolt config"
+
+# Remove any Dolt remote that bd init may have registered pointing at the
+# GitHub git repo. GitHub speaks git protocol; Dolt can only push to DoltHub
+# or another Dolt server. A stale git URL remote causes "no common ancestor"
+# push errors on every bd write. The git JSONL backup handles persistence.
+(cd "$DOLT_DB_DIR" && dolt remote remove origin 2>/dev/null || true)
+echo "    Cleared stale Dolt remote (git JSONL backup handles persistence)"
 echo
 
 # ---------------------------------------------------------------------------
