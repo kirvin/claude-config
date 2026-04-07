@@ -86,6 +86,7 @@ echo
 
 echo "==> Copying Claude Code config from $CONFIG_REPO"
 cp -r "$CONFIG_REPO/.claude" .
+cp -r "$CONFIG_REPO/skills" .
 cp "$CONFIG_REPO/skills-lock.json" .
 cp "$CONFIG_REPO/CLAUDE.md" .
 echo
@@ -137,6 +138,15 @@ bd dolt start
 
 echo "    Applying Beads schema"
 bd migrate
+
+# Workaround: bd init writes 'issue-prefix' (dash) to the Dolt config table,
+# but bd create checks for 'issue_prefix' (underscore). Insert the underscore
+# key so that bd create and bd list work without requiring bd init --force.
+DOLT_DB_DIR="$SHARED_DOLT_DIR/$SLUG"
+(cd "$DOLT_DB_DIR" && dolt sql -q \
+  "INSERT INTO config (\`key\`, value) VALUES ('issue_prefix', '$SLUG') \
+   ON DUPLICATE KEY UPDATE value='$SLUG';" 2>/dev/null || true)
+echo "    Patched issue_prefix in Dolt config"
 echo
 
 # ---------------------------------------------------------------------------
@@ -144,7 +154,7 @@ echo
 # ---------------------------------------------------------------------------
 
 echo "==> Committing initial config"
-git add .claude/ skills-lock.json CLAUDE.md README.md .beads/ 2>/dev/null || true
+git add .claude/ skills/ skills-lock.json CLAUDE.md README.md .beads/ 2>/dev/null || true
 git add . 2>/dev/null || true
 git commit -m "chore: add Claude Code configuration"
 git push -u origin main
