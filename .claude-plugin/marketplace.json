@@ -1,7 +1,8 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-config",
   "description": "Personal Claude Code configuration template and workflow plugins",
-  "author": {
+  "owner": {
     "name": "Kelly Irvin"
   },
   "plugins": [
