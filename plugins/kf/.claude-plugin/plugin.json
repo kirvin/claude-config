@@ -1,7 +1,7 @@
 {
   "name": "kf",
-  "description": "Personal workflow plugins — spec-first methodology and UI/UX design skills (delegates to project .agents/skills/)",
-  "version": "1.2.0",
+  "description": "Personal workflow plugins — spec-first methodology and UI/UX design skills (self-contained, generated from .agents/skills/ via scripts/generate-plugin-skills.js)",
+  "version": "1.2.1",
   "author": {
     "name": "Kelly Irvin"
   },
