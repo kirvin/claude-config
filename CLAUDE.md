@@ -1,34 +1,6 @@
-# CLAUDE.md
+# Project Instructions for AI Agents
 
-This file provides guidance to Claude Code when working with code in this repository.
-
-## Project Documentation
-
-See the following docs for project-specific details:
-
-- `docs/codebase-overview.md` — Architecture, services, data model
-- `docs/development.md` — Development commands and common workflows
-- `docs/decisions.md` — Architectural decision log
-
-## Issue Tracking (Beads)
-
-This project uses **Beads** (`bd`) for AI-native issue tracking.
-
-```bash
-bd ready          # show next issue to work on
-bd show <id>      # show issue details
-bd update <id>    # update issue status/notes
-bd close <id>     # close completed issue
-```
-
-Mandatory steps per issue: pick issue → implement → run quality gates → `bd close` → `git push`.
-
-**When the user gives a direct implementation instruction**, always create a beads issue with `bd create` before writing any code. Mark it `in_progress` immediately, then proceed.
-
-# Compact instructions
-
-When using compact, focus on test output and code changes.
-
+This file provides instructions and context for AI coding agents working on this project.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
@@ -76,3 +48,46 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+
+## Build & Test
+
+No build step. Scripts are plain bash — validate syntax with:
+
+```bash
+bash -n scripts/<script>.sh
+node scripts/generate-plugin-skills.js --dry-run
+```
+
+## Purpose & Owner
+
+This is **@kirvin's personal Claude Code toolkit** (`github.com/kirvin/claude-config`). It distributes a consistent set of rules, skills, plugins, and workflow conventions across all of kirvin's personal projects.
+
+Two things happen here:
+
+1. **Plugin authoring** — Custom skills live in `plugins/kf/` and `plugins/sgd/`. When a consuming project runs `claude plugin update kf@claude-config`, it pulls from this repo.
+2. **Project provisioning** — `scripts/install-to-project.sh` copies rules, scripts, and AWS Bedrock config into any existing project. `scripts/new-project.sh` creates a new repo from scratch.
+
+If you're working in a project that has the `kf` plugin installed and something is wrong with a skill, the source is in `plugins/kf/skills/` here. If a rule needs to change across all projects, update it here and re-run `install-to-project.sh --force` against each project.
+
+> Note: this repo was previously named `agent-dev-plugins`. If you see that name anywhere in comments or error messages, it's stale and should be updated to `claude-config`.
+
+## Architecture Overview
+
+Key components:
+
+- `plugins/kf/` — Custom skills (spec-first, repo knowledge, session lifecycle). These are hand-authored in `plugins/kf/skills/`.
+- `plugins/sgd/` — Design skills. **Do not edit directly** — generated from `.agents/skills/` by `scripts/generate-plugin-skills.js` (`make plugin-release`).
+- `.claude/rules/` — Rule files that trigger skill activations and enforce workflow patterns. Copied into target projects by `install-to-project.sh`.
+- `scripts/install-to-project.sh` — Copies the toolkit into an existing project repo (includes AWS Bedrock config). Run via `make install-to-project target=/path/to/project`. Safe to re-run; use `force=1` to overwrite.
+- `scripts/new-project.sh` — Creates a new private GitHub repo under the kirvin account and runs the full install sequence.
+- `scripts/setup.sh` — Per-machine setup (Homebrew, AWS, plugins, beads). This file is a template; `install-to-project.sh` injects `ADP_MARKETPLACE_URL` and `ADP_PLUGIN_NAME` before copying it into a target project. Do not run it from this repo directly.
+- `scripts/generate-plugin-skills.js` — Syncs `.agents/skills/` into `plugins/sgd/skills/`.
+
+## Conventions & Patterns
+
+- Scripts use `#!/usr/bin/env bash` and `set -euo pipefail`
+- All scripts resolve `REPO_ROOT` via `BASH_SOURCE[0]` before using relative paths
+- `.env` is always sourced from `$REPO_ROOT/.env` (never relative `./`)
+- `plugins/sgd/` skills are generated, not hand-edited — edit source in `.agents/skills/`, run `make plugin-release`
+- Plugin version bumps are required for `claude plugin update` to pick up changes — see `docs/deployment-and-release.md`

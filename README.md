@@ -1,10 +1,23 @@
 # claude-config
 
-Reusable Claude Code configuration — rules, skills, and workflow conventions for consistent AI-assisted development across projects.
+Personal Claude Code toolkit for [@kirvin](https://github.com/kirvin). Distributes a consistent set of rules, skills, plugins, and workflow conventions across all of kirvin's personal projects.
+
+## What this is
+
+This repo serves two purposes:
+
+1. **Plugin marketplace** — hosts the `kf` plugin (custom skills) and the `sgd` plugin (design skills). Projects point Claude Code here to install and update those plugins.
+2. **Project installer** — `scripts/install-to-project.sh` copies the rules, workflow conventions, and AWS Bedrock config into any existing project repo. `scripts/new-project.sh` creates a new repo from scratch with everything already configured.
+
+If you're working on a project that has the `kf` plugin installed, this is where those skills live. If something in the Claude Code workflow feels wrong in one of kirvin's projects, the source is probably here.
 
 ## What's included
 
 ```
+plugins/
+  kf/             — Custom skills (spec-first, repo knowledge, session lifecycle)
+  sgd/            — Design skills (generated from .agents/skills/)
+
 .claude/
   rules/
     beads-github.md       — Close beads issues linked to GitHub issues
@@ -18,17 +31,41 @@ Reusable Claude Code configuration — rules, skills, and workflow conventions f
     testing.md            — Activates ce:writing-tests and ce:fixing-flaky-tests
     tdd.md                — Red-Green-Refactor for all features and bugs
     verification.md       — Run lint/build/tests before claiming work is done
+
+scripts/
+  new-project.sh          — Create a new repo pre-configured with this toolkit
+  install-to-project.sh   — Install this toolkit into an existing repo
+  setup.sh                — Per-machine setup (Homebrew, AWS, plugins, beads); copied into target projects by install-to-project.sh
+  generate-plugin-skills.js — Sync .agents/skills/ into plugins/sgd/skills/
+
 CLAUDE.md                 — Template project entry point
 skills-lock.json          — Pinned community skills (restored via npx skills)
 ```
 
-## New project setup
+## Setting up a new project
 
-### Prerequisites (one-time per machine)
+```bash
+# From the claude-config root:
+./scripts/new-project.sh "My Project Name"
+```
+
+This creates a private GitHub repo under kirvin's account, copies the config layer in, initializes beads, and prints the next steps.
+
+For an existing repo:
+
+```bash
+./scripts/install-to-project.sh /path/to/your-project
+# Then, in the target project:
+cd /path/to/your-project && ./scripts/setup.sh
+```
+
+`install-to-project.sh` is safe to re-run. Use `--force` to overwrite files that already exist.
+
+## Prerequisites (one-time per machine)
 
 1. Install [Claude Code](https://claude.ai/code)
 2. Install Beads: `brew install beads`
-3. Install the `ce` plugin — inside a Claude Code session:
+3. Install the `ce` plugin (inside a Claude Code session):
    ```
    /plugin marketplace add https://github.com/rileyhilliard/claude-essentials
    /plugin install ce
@@ -45,50 +82,41 @@ skills-lock.json          — Pinned community skills (restored via npx skills)
    }
    ```
 
-### Per project
+## Customizing after install
 
-```bash
-# 1. Copy this config layer into your project root
-cp -r /path/to/claude-config/.claude .
-cp /path/to/claude-config/skills-lock.json .
-cp /path/to/claude-config/CLAUDE.md .   # then customize
+- **`CLAUDE.md`** — Update doc links to match your project's actual docs
+- **`.claude/rules/npm.md`** — Remove or adapt if not using npm
+- **`.claude/rules/requirements.md`** — Update the path to your requirements doc, or remove
+- **`.claude/rules/design-skills.md`** — Remove skills irrelevant to your stack
 
-# 2. Restore skills
-npx skills experimental_install --yes --agent claude-code
+## Managing skills
 
-# 3. Initialize Beads
-bd init --shared-server
-bd hooks install
-
-# 4. Commit
-git add .claude/ skills-lock.json CLAUDE.md .beads/
-git commit -m "chore: add Claude Code configuration"
-```
-
-### Customize for your project
-
-After copying, update:
-
-- **`CLAUDE.md`** — Update the doc links to match your project's actual docs
-- **`.claude/rules/npm.md`** — Remove if not using npm, or adapt the Docker lockfile command to your setup
-- **`.claude/rules/requirements.md`** — Update the path to your requirements doc, or remove if not using this convention
-- **`.claude/rules/design-skills.md`** — Remove skills that aren't relevant to your stack
-
-## Updating skills
-
-To add a new skill:
+Add a skill:
 ```bash
 npx skills add <owner/repo@skill-name>
-# commit the updated skills-lock.json
 git add skills-lock.json && git commit -m "chore: add <skill-name> skill"
 ```
 
-To update all skills to latest:
+Update all skills to latest:
 ```bash
 npx skills update
 git add skills-lock.json && git commit -m "chore: update skills"
 ```
 
-## Keeping rules in sync across projects
+## Releasing plugin updates
 
-Currently manual: update rules here, then copy changed files to other projects.
+See `docs/deployment-and-release.md` for the full release process. Short version:
+
+1. Edit skills under `plugins/kf/` or `plugins/sgd/`
+2. Bump the version in the plugin's `.claude-plugin/plugin.json`
+3. Push — consuming projects update with `claude plugin update kf@claude-config`
+
+## Propagating config changes to existing projects
+
+Rules and scripts aren't auto-synced. To push an update to an existing project:
+
+```bash
+./scripts/install-to-project.sh /path/to/existing-project --force
+```
+
+This re-copies changed files. Review the diff in the target project before committing.

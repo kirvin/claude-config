@@ -1,5 +1,13 @@
 # Design Skills
 
+> **Prerequisite:** These skills are provided by the `sgd` plugin from the `claude-config`
+> marketplace. They must be installed before this rule has any effect:
+> ```
+> claude plugin marketplace add github:kirvin/claude-config
+> claude plugin install sgd@claude-config --scope project
+> ```
+> Alternatively, run `./scripts/setup.sh` from the claude-config repo.
+
 When working on UI, reviewing design/UX, or establishing design guidelines,
 evaluate and activate relevant design skills BEFORE implementing or advising.
 
@@ -25,7 +33,5 @@ When any row above matches, call `Skill(<skill-name>)` for EACH relevant skill
 before writing code or design advice — the same as the global mandatory sequence.
 Multiple skills may apply; activate all that match.
 
-If a skill fails to load, stop and report it rather than proceeding silently.
-
 `frontend-design` + `design-taste-frontend` are the baseline pair for any
-non-trivial UI work in this app. Default to both unless the task is clearly a minor tweak.
+non-trivial UI work. Default to both unless the task is clearly a minor tweak.
