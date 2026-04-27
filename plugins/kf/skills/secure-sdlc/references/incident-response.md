@@ -1,152 +1,150 @@
 # Incident Response Playbooks
 
-Self-contained playbooks for the most likely security incidents in this stack.
-Each playbook is independent — jump directly to the relevant one.
+Three playbooks for the most common credential exposure scenarios in this stack.
+Each playbook has three time-boxed phases. Start the clock when the exposure is confirmed.
 
 ---
 
 ## Playbook 1: AWS Credential Compromise
 
-**Symptoms:** Unexpected AWS API calls, unknown IAM activity, billing spike, alert from AWS GuardDuty.
+### Immediate actions (< 5 min)
 
-### Immediate (within 15 minutes)
+1. Open the AWS IAM console and deactivate the exposed access key:
+   `IAM → Users → <user> → Security credentials → Deactivate`
+2. Revoke any active AWS SSO sessions for the affected profile:
+   `AWS SSO portal → Active sessions → Revoke`
+3. If the key was used in CI, remove or disable the GitHub Actions secret immediately:
+   `GitHub → Settings → Secrets → Delete <AWS_*>`
 
-```bash
-# 1. Identify the compromised credential
-# Check which profile / key is involved from the alert or log
+### Short-term actions (< 1 hr)
 
-# 2. Revoke the compromised access key (if long-lived key)
-aws iam delete-access-key --access-key-id <KEY_ID> --profile <admin-profile>
+1. Rotate the AWS profile locally:
+   ```bash
+   aws iam create-access-key --user-name <user>
+   # Update ~/.aws/credentials with the new key
+   aws iam delete-access-key --access-key-id <old-key-id> --user-name <user>
+   ```
+2. Verify the old key is no longer usable:
+   ```bash
+   AWS_ACCESS_KEY_ID=<old-key> AWS_SECRET_ACCESS_KEY=<old-secret> \
+     aws sts get-caller-identity
+   # Expected: error — credentials are invalid
+   ```
+3. Verify the new key works:
+   ```bash
+   aws sts get-caller-identity
+   # Expected: returns your account ID and user ARN
+   ```
+4. Update `.env` with the new key values; re-source before continuing work
+5. If CI was affected, add the new key as a GitHub Actions secret and re-run the failed workflow
 
-# 3. For SSO-based compromise: revoke active sessions
-# Go to: AWS Console → IAM Identity Center → Users → <user> → Active sessions → Revoke all
-```
+### Follow-up (< 24 hr)
 
-### Short-term (within 1 hour)
-
-```bash
-# 4. Review CloudTrail for actions taken with the compromised credential
-aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=Username,AttributeValue=<username> \
-  --start-time <incident-start> \
-  --profile <admin-profile>
-
-# 5. Check for any new IAM users, roles, or policies created
-aws iam list-users --profile <admin-profile>
-aws iam list-roles --profile <admin-profile> | grep -v 'AWS::'
-```
-
-### Recovery
-
-1. Rotate the credential — issue a new key or re-provision SSO
-2. Update `.env` / `.env.local` in all projects using the old credential
-3. Audit what data or services the compromised credential had access to
-4. File a beads issue for any data that may have been exfiltrated
-5. Review and tighten IAM permissions if the incident revealed over-privileging
+- Review CloudTrail for any API calls made with the compromised key during the exposure window
+- File a beads incident issue:
+  ```bash
+  bd create \
+    --title="[incident] AWS credential compromised — exposure window <date range>" \
+    --description="Key: <last 4 chars only>
+Exposure window: <start> to <revocation time>
+CloudTrail review: <findings>
+Root cause: <how it was exposed>" \
+    --type=bug \
+    --priority=0
+  ```
+- If CloudTrail shows unauthorized usage, escalate to the AWS account owner
 
 ---
 
-## Playbook 2: Figma API Token Leak
+## Playbook 2: Figma Token Exposure
 
-**Symptoms:** Token found in git history, logs, or public-facing output; unexpected Figma API activity.
+### Immediate actions (< 5 min)
 
-### Immediate
+1. Revoke the exposed personal access token:
+   Go to https://www.figma.com/settings → Personal access tokens → Revoke the token
+2. Confirm revocation: any Figma API call using the old token should return 403
 
-1. **Revoke the token in Figma:**
-   Figma → Settings → Account → Personal access tokens → Delete the token
+### Short-term actions (< 1 hr)
 
-2. **Verify revocation:**
+1. Create a new token at https://www.figma.com/settings → Personal access tokens → Create new token
+2. Update `.env.local`:
    ```bash
-   curl -H "X-Figma-Token: <OLD_TOKEN>" https://api.figma.com/v1/me
-   # Should return 403 after revocation
+   FIGMA_API_TOKEN=<new-token>
+   ```
+3. Re-source and verify:
+   ```bash
+   source .env.local
+   curl -s -H "X-Figma-Token: $FIGMA_API_TOKEN" \
+     "https://api.figma.com/v1/me" | jq '.email'
+   ```
+4. Update `.claude/settings.local.json` if the token was written there by `setup.sh`
+5. Check any CI/CD secrets that stored the old token
+
+### Follow-up (< 24 hr)
+
+- Figma does not provide a comprehensive API audit log for PATs; note the exposure window
+  in the incident issue and monitor for unexpected file access
+- File a beads incident issue with the same format as Playbook 1
+
+---
+
+## Playbook 3: Secret in Git History
+
+### Immediate actions (< 5 min)
+
+1. Treat the secret as compromised — rotate it immediately using the relevant playbook above
+   before attempting to clean the history
+2. Notify all active collaborators on the branch to not push or pull until the purge is complete
+3. Do not merge any PRs that include the commit containing the secret
+
+### Short-term actions (< 1 hr)
+
+1. Identify the commit and file containing the secret:
+   ```bash
+   git log --all --oneline | head -20
+   git show <commit-sha>:<path/to/file>
+   ```
+2. Install `git-filter-repo` if not present:
+   ```bash
+   brew install git-filter-repo
+   ```
+3. Purge the secret from all history:
+   ```bash
+   git filter-repo --path <path/to/file> --invert-paths
+   # Or to replace just the value:
+   git filter-repo --replace-text <(echo '<secret-value>==>REDACTED')
+   ```
+4. Force-push all affected branches:
+   ```bash
+   git push origin --force --all
+   git push origin --force --tags
+   ```
+5. Instruct all collaborators to re-clone or reset their local copies:
+   ```bash
+   # Each collaborator runs:
+   git fetch origin
+   git reset --hard origin/<branch>
    ```
 
-### Clean up
+### Follow-up (< 24 hr)
 
-```bash
-# If found in git history — remove from all commits
-# WARNING: this rewrites history; coordinate with any collaborators first
-git filter-branch --force --index-filter \
-  'git rm --cached --ignore-unmatch .env' \
-  --prune-empty --tag-name-filter cat -- --all
-
-# OR use git-filter-repo (preferred over filter-branch):
-pip install git-filter-repo
-git filter-repo --path .env --invert-paths
-```
-
-After rewriting: force-push all branches, rotate the GitHub token used for the push if it was also exposed.
-
-### Recovery
-
-1. Generate a new Figma personal access token
-2. Update `.env.local` in all affected projects
-3. Re-run `./scripts/setup.sh` or manually update `.claude/settings.local.json`
-
----
-
-## Playbook 3: Secret Exposed in Git History
-
-**Symptoms:** CI scanner (gitleaks) flags a commit; manual discovery of a secret in history.
-
-### Assessment
-
-```bash
-# Find commits containing the secret pattern
-git log --all --oneline -S '<partial-secret-or-pattern>'
-
-# Identify which files in history contain it
-git log --all --full-history -- '*.env'
-git log --all --full-history -- '**/*.json'
-```
-
-### If the secret is still in HEAD
-
-```bash
-# Remove the file from HEAD and .gitignore it
-echo "<file>" >> .gitignore
-git rm --cached <file>
-git commit -m "chore: remove accidentally committed secret"
-```
-
-Then rotate the credential immediately — treat it as compromised regardless of whether the commit was pushed.
-
-### If the secret is only in history (not HEAD)
-
-Use `git-filter-repo` to remove it from all history:
-
-```bash
-# Remove a specific file from all history
-git filter-repo --path <file> --invert-paths
-
-# Remove by regex pattern (e.g., a specific token value)
-git filter-repo --replace-text <(echo 'LITERAL:<token>==>' )
-```
-
-After rewriting:
-1. Force-push all branches: `git push --force-with-lease`
-2. Notify any collaborators to re-clone
-3. Rotate the exposed credential
-
-### Allowlisting a false positive
-
-If the scanner flagged a non-secret (placeholder, example value):
-
-```bash
-# Add to .gitleaks.toml
-[allowlist]
-regexes = ["<pattern-that-matched>"]
-```
-
-Commit the allowlist update with a comment explaining why it's a false positive.
-
----
-
-## Post-Incident
-
-For any incident:
-
-1. **Create a beads issue** documenting what happened, impact, and steps taken
-2. **Update rules / EARS invariants** if the incident revealed a gap
-3. **Add a gitleaks allowlist entry** if a false positive triggered the response
-4. **Review `.gitignore`** — if a secret escaped via a missing pattern, add it now
+- Verify the secret no longer appears in any branch or tag:
+  ```bash
+  git log --all --oneline --source -- <path/to/file>
+  git grep '<secret-value>' $(git rev-list --all)
+  ```
+- File a beads incident issue:
+  ```bash
+  bd create \
+    --title="[incident] Secret exposed in git history" \
+    --description="File: <path>
+Commit: <sha>
+Exposure window: <date range>
+Secret rotated: yes
+History purged: yes
+Collaborators notified: yes/no" \
+    --type=bug \
+    --priority=0
+  ```
+- Review whether `.gitignore` needs updating to prevent recurrence
+- Consider adding a pre-commit hook or CI check that scans for credential patterns

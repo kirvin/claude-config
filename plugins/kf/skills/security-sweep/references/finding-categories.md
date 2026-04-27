@@ -1,129 +1,132 @@
-# Security Finding Categories
+# Finding Categories
 
-Seven categories used in every security sweep. Each entry includes the definition,
-detection signals, and a bad/good example pair.
+Categories specific to what this toolkit produces: bash scripts, GitHub Actions workflows,
+AWS SSO configuration, and Figma API integration.
+
+For each category: description, what patterns to look for in a diff, bad vs good example.
 
 ---
 
-## CRED — Credential Exposure
+## CRED — Hardcoded Credentials
 
-**Definition:** Credentials, tokens, keys, or passwords present in source code, logs, or
-output where they could be read by an unauthorized party.
+**Description:** Credential values (API tokens, passwords, AWS keys) embedded directly
+in source code, config files, or scripts rather than read from environment variables.
 
-**Detection signals:**
-- String matching: `api_key`, `secret`, `token`, `password`, `private_key` followed by a value
-- `.env` files staged or committed
-- Base64-encoded strings in source (potential encoded secrets)
-- Values matching known token formats (e.g., `ghp_`, `figd_`, `AKIA`)
+**Patterns to look for in a diff:**
+- Assignment of a string that looks like a token: `TOKEN="sk-..."`, `KEY='AKIA...'`
+- Base64-encoded credential: a long random string assigned to a variable
+- `.env` file being added or modified with real values (not placeholders)
+- AWS access key pattern: `AKIA[0-9A-Z]{16}`
+- Figma token pattern: a string starting with `figd_` after `FIGMA_API_TOKEN=`
 
 **Bad:**
-```javascript
-const figmaToken = "figd_abc123xyz";  // hardcoded in source
+```bash
+FIGMA_API_TOKEN="figd_abcdefghijklmnop"
+curl -H "X-Figma-Token: $FIGMA_API_TOKEN" ...
 ```
 
 **Good:**
-```javascript
-const figmaToken = process.env.FIGMA_API_TOKEN;
-if (!figmaToken) throw new Error("FIGMA_API_TOKEN not set");
+```bash
+# In .env.local (not committed):
+# FIGMA_API_TOKEN=your-token-here
+
+# In script:
+: "${FIGMA_API_TOKEN:?FIGMA_API_TOKEN must be set in .env.local}"
+curl -H "X-Figma-Token: ${FIGMA_API_TOKEN}" ...
 ```
 
 ---
 
-## AUTH — Authentication / Authorization
+## AUTH — Missing Credential Validation
 
-**Definition:** Missing, bypassable, or incorrectly implemented authentication or
-authorization checks.
+**Description:** Scripts or code that use credential environment variables without
+first verifying they are set and non-empty, leading to silent failures or confusing errors.
 
-**Detection signals:**
-- Route handlers with no auth middleware
-- Auth checks only on the happy path (missing error path, admin path, etc.)
-- `req.user` or `req.session` used without null check
-- Privilege checks based on user-supplied parameters without server-side verification
+**Patterns to look for in a diff:**
+- `$TOKEN` or `$API_KEY` used in a curl/aws/gh command without a preceding check
+- New script missing `set -euo pipefail` (nounset catches unset vars, but explicit checks
+  are clearer)
+- Credential used in a conditional path that could be silently skipped
 
 **Bad:**
-```javascript
-app.get('/admin/users', (req, res) => {
-  if (req.query.admin === 'true') {  // user controls this
-    return db.getAllUsers();
-  }
-});
+```bash
+aws s3 cp file.txt s3://bucket/  # fails confusingly if AWS creds unset
 ```
 
 **Good:**
-```javascript
-app.get('/admin/users', requireAuth, requireRole('admin'), (req, res) => {
-  return db.getAllUsers();
-});
+```bash
+: "${AWS_PROFILE:?AWS_PROFILE must be set}"
+aws s3 cp file.txt s3://bucket/
 ```
 
 ---
 
-## INJECT — Injection
+## INJECT — Shell Injection
 
-**Definition:** User-supplied input passed unsanitized into queries, commands, templates,
-or other interpreted contexts.
+**Description:** Unquoted variables, use of `eval`, or user-controlled input passed
+directly to shell commands, enabling command injection.
 
-**Detection signals:**
-- String concatenation in SQL queries
-- `exec`, `spawn`, `execSync` with user-supplied arguments
-- Template literals that include `req.body`, `req.query`, or `req.params` without sanitization
-- `innerHTML`, `dangerouslySetInnerHTML`, `eval` with external input
+**Patterns to look for in a diff:**
+- `eval "$something"` where `$something` is not a literal constant
+- Unquoted `$variable` in a command that accepts filenames or paths
+- User-provided input (function argument, env var, file content) interpolated
+  directly into a `bash -c "..."` or similar
+- `$()` subshell using a variable that could be attacker-controlled
 
 **Bad:**
-```javascript
-const result = await db.query(`SELECT * FROM users WHERE name = '${req.body.name}'`);
+```bash
+install_dir="$1"
+rm -rf $install_dir/old  # unquoted — spaces or metacharacters break this
 ```
 
 **Good:**
-```javascript
-const result = await db.query('SELECT * FROM users WHERE name = $1', [req.body.name]);
+```bash
+install_dir="$1"
+rm -rf "${install_dir}/old"
 ```
 
 ---
 
-## EXPOSE — Information Disclosure
+## EXPOSE — Sensitive Data in Output
 
-**Definition:** Sensitive data (credentials, PII, internal paths, stack traces) returned
-to callers or written to logs where it shouldn't be.
+**Description:** Credential values, internal paths, account IDs, or stack traces
+appearing in log output, error messages, or debug traces that could be captured
+in CI logs or terminal history.
 
-**Detection signals:**
-- `console.log` / `logger.debug` calls with `req.body`, `credentials`, or error objects
-- Error handlers that return `err.stack` or `err.message` to HTTP responses
-- API responses that include more fields than the client needs
-- Log lines containing email addresses or user IDs in plaintext
+**Patterns to look for in a diff:**
+- `echo "$TOKEN"` or `echo "token: $API_KEY"` in any context
+- `set -x` enabled in a script that references credential variables
+- Error handler that prints the full environment: `env` or `printenv` in an error trap
+- AWS error responses printed without filtering account IDs or ARNs
 
 **Bad:**
-```javascript
-app.use((err, req, res, next) => {
-  res.status(500).json({ error: err.stack });  // exposes internals
-});
+```bash
+echo "Using token: $FIGMA_API_TOKEN"
+curl -H "X-Figma-Token: $FIGMA_API_TOKEN" ...
 ```
 
 **Good:**
-```javascript
-app.use((err, req, res, next) => {
-  logger.error({ err }, 'Unhandled error');     // logs detail server-side
-  res.status(500).json({ error: 'Internal server error' });  // safe to client
-});
+```bash
+echo "Using Figma token: [set, ${#FIGMA_API_TOKEN} chars]"
+curl -H "X-Figma-Token: $FIGMA_API_TOKEN" ...
 ```
 
 ---
 
-## SUPPLY — Supply Chain
+## SUPPLY — Supply Chain / Dependency Risks
 
-**Definition:** Unverified, mutable, or potentially malicious external dependencies
-(npm packages, GitHub Actions, Homebrew formulae).
+**Description:** New external dependencies or GitHub Actions steps introduced without
+provenance verification or version pinning, enabling supply chain attacks.
 
-**Detection signals:**
-- GitHub Actions `uses:` with version tag instead of SHA
-- npm packages with no repository URL or very low download counts
-- `npm install <package>` without auditing (`npm audit`)
-- Brewfile formulae without fully-qualified tap names
-- Package lockfile not committed (or not updated after install)
+**Patterns to look for in a diff:**
+- New `uses: owner/action@v1` (tag-based) instead of `uses: owner/action@<full-sha>`
+- New `curl | bash` or `wget | sh` pattern
+- New npm/pip/brew dependency added without a comment on why it's trusted
+- A plugin install referencing a branch instead of a released version
 
 **Bad:**
 ```yaml
-- uses: actions/checkout@v4   # mutable tag
+- uses: actions/checkout@v4
 ```
 
 **Good:**
@@ -133,71 +136,61 @@ app.use((err, req, res, next) => {
 
 ---
 
-## SCOPE — Excessive Privilege
+## SCOPE — Path and Filesystem Scope
 
-**Definition:** IAM roles, API tokens, or OAuth scopes granted more permissions than the
-component actually needs.
+**Description:** Scripts that write files outside their expected working directory,
+or that accept user-provided paths without validation, enabling unintended writes
+or path traversal.
 
-**Detection signals:**
-- IAM policies with `"Action": "*"` or `"Resource": "*"`
-- GitHub tokens with `repo` scope when only `read:repo` is needed
-- API integrations requesting write access when they only read
-- AWS credentials with `AdministratorAccess` used for routine operations
+**Patterns to look for in a diff:**
+- `cp` or `mv` or `mkdir` using a variable path without validation
+- Install script accepting a `--target` argument and using it directly without
+  confirming it stays within expected bounds
+- Symlink creation that could point outside the repo
+- `REPO_ROOT` computed incorrectly (relative path instead of absolute)
 
 **Bad:**
-```json
-{
-  "Effect": "Allow",
-  "Action": "s3:*",
-  "Resource": "*"
-}
+```bash
+target="$1"
+cp template.sh "$target/scripts/setup.sh"  # no validation of $target
 ```
 
 **Good:**
-```json
-{
-  "Effect": "Allow",
-  "Action": ["s3:GetObject", "s3:PutObject"],
-  "Resource": "arn:aws:s3:::my-bucket/*"
-}
+```bash
+target="$(realpath "$1")"
+[[ "$target" == /Users/* ]] || { echo "ERROR: target must be under /Users/"; exit 1; }
+cp template.sh "$target/scripts/setup.sh"
 ```
 
 ---
 
-## CI — CI/CD Pipeline
+## CI — GitHub Actions Security
 
-**Definition:** GitHub Actions workflow configuration that exposes secrets, uses unsafe
-triggers, or lacks minimum permission declarations.
+**Description:** Workflow changes that expand permissions, introduce
+`pull_request_target` misuse, add broad `write` permissions, or expose secrets
+to untrusted code paths.
 
-**Detection signals:**
-- Missing `permissions:` key (defaults to write-all)
-- `pull_request_target` trigger with code checkout from the PR branch
-- `run:` steps that echo or print secret values
-- `--verbose` or `--debug` flags that may expand secrets
-- `workflow_dispatch` with inputs that flow into `run:` without sanitization
+**Patterns to look for in a diff:**
+- New `pull_request_target` trigger (dangerous — runs with write access on PRs from forks)
+- `permissions: write-all` or removal of a `permissions:` block that was previously scoping access
+- New `secrets.*` reference in a context reachable by fork PRs
+- `GITHUB_TOKEN` granted `write` permission to resources it didn't have before
+- New workflow that runs on `push` to main with no branch protection check
 
 **Bad:**
 ```yaml
-on: pull_request_target
-jobs:
-  build:
-    steps:
-      - uses: actions/checkout@SHA
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}  # untrusted code
-      - run: npm test
-        env:
-          API_KEY: ${{ secrets.API_KEY }}  # exposed to untrusted code
+on:
+  pull_request_target:
+    types: [opened]
+permissions: write-all
 ```
 
 **Good:**
 ```yaml
-on: pull_request
+on:
+  pull_request:
+    types: [opened]
 permissions:
   contents: read
-jobs:
-  build:
-    steps:
-      - uses: actions/checkout@SHA
-      - run: npm test
+  pull-requests: write
 ```
