@@ -1,196 +1,83 @@
 # Finding Categories
 
-Categories specific to what this toolkit produces: bash scripts, GitHub Actions workflows,
-AWS SSO configuration, and Figma API integration.
-
-For each category: description, what patterns to look for in a diff, bad vs good example.
-
----
-
-## CRED — Hardcoded Credentials
-
-**Description:** Credential values (API tokens, passwords, AWS keys) embedded directly
-in source code, config files, or scripts rather than read from environment variables.
-
-**Patterns to look for in a diff:**
-- Assignment of a string that looks like a token: `TOKEN="sk-..."`, `KEY='AKIA...'`
-- Base64-encoded credential: a long random string assigned to a variable
-- `.env` file being added or modified with real values (not placeholders)
-- AWS access key pattern: `AKIA[0-9A-Z]{16}`
-- Figma token pattern: a string starting with `figd_` after `FIGMA_API_TOKEN=`
-
-**Bad:**
-```bash
-FIGMA_API_TOKEN="figd_abcdefghijklmnop"
-curl -H "X-Figma-Token: $FIGMA_API_TOKEN" ...
-```
-
-**Good:**
-```bash
-# In .env.local (not committed):
-# FIGMA_API_TOKEN=your-token-here
-
-# In script:
-: "${FIGMA_API_TOKEN:?FIGMA_API_TOKEN must be set in .env.local}"
-curl -H "X-Figma-Token: ${FIGMA_API_TOKEN}" ...
-```
+Seven universal categories used in every security sweep, regardless of stack.
+This file defines what each category means. Stack-specific detection patterns
+and examples live in `stacks/`.
 
 ---
 
-## AUTH — Missing Credential Validation
+## How to use this file
 
-**Description:** Scripts or code that use credential environment variables without
-first verifying they are set and non-empty, leading to silent failures or confusing errors.
+1. Load this file to understand the category framework
+2. Detect the project stack (see `security-sweep/SKILL.md` Step 1)
+3. Load the matching file from `stacks/` for patterns and examples
+4. If no stack file matches, load `stacks/generic.md`
 
-**Patterns to look for in a diff:**
-- `$TOKEN` or `$API_KEY` used in a curl/aws/gh command without a preceding check
-- New script missing `set -euo pipefail` (nounset catches unset vars, but explicit checks
-  are clearer)
-- Credential used in a conditional path that could be silently skipped
-
-**Bad:**
-```bash
-aws s3 cp file.txt s3://bucket/  # fails confusingly if AWS creds unset
-```
-
-**Good:**
-```bash
-: "${AWS_PROFILE:?AWS_PROFILE must be set}"
-aws s3 cp file.txt s3://bucket/
-```
+Multiple stack files may apply — a project can be Python + bash deployment scripts,
+or a Node.js service with React Native client. Load all that match.
 
 ---
 
-## INJECT — Shell Injection
+## CRED — Credential Exposure
 
-**Description:** Unquoted variables, use of `eval`, or user-controlled input passed
-directly to shell commands, enabling command injection.
+Credential values (API tokens, passwords, private keys, database connection strings)
+present in source code, config files, logs, or output where they could be read
+by an unauthorized party.
 
-**Patterns to look for in a diff:**
-- `eval "$something"` where `$something` is not a literal constant
-- Unquoted `$variable` in a command that accepts filenames or paths
-- User-provided input (function argument, env var, file content) interpolated
-  directly into a `bash -c "..."` or similar
-- `$()` subshell using a variable that could be attacker-controlled
-
-**Bad:**
-```bash
-install_dir="$1"
-rm -rf $install_dir/old  # unquoted — spaces or metacharacters break this
-```
-
-**Good:**
-```bash
-install_dir="$1"
-rm -rf "${install_dir}/old"
-```
+**Core question:** Is a secret value present anywhere it shouldn't be?
 
 ---
 
-## EXPOSE — Sensitive Data in Output
+## AUTH — Authentication / Authorization
 
-**Description:** Credential values, internal paths, account IDs, or stack traces
-appearing in log output, error messages, or debug traces that could be captured
-in CI logs or terminal history.
+Missing, bypassable, or incorrectly implemented checks that allow unauthenticated
+or unauthorized access to protected resources or operations.
 
-**Patterns to look for in a diff:**
-- `echo "$TOKEN"` or `echo "token: $API_KEY"` in any context
-- `set -x` enabled in a script that references credential variables
-- Error handler that prints the full environment: `env` or `printenv` in an error trap
-- AWS error responses printed without filtering account IDs or ARNs
-
-**Bad:**
-```bash
-echo "Using token: $FIGMA_API_TOKEN"
-curl -H "X-Figma-Token: $FIGMA_API_TOKEN" ...
-```
-
-**Good:**
-```bash
-echo "Using Figma token: [set, ${#FIGMA_API_TOKEN} chars]"
-curl -H "X-Figma-Token: $FIGMA_API_TOKEN" ...
-```
+**Core question:** Can a caller access something they shouldn't without proper verification?
 
 ---
 
-## SUPPLY — Supply Chain / Dependency Risks
+## INJECT — Injection
 
-**Description:** New external dependencies or GitHub Actions steps introduced without
-provenance verification or version pinning, enabling supply chain attacks.
+User-supplied or externally-controlled input passed unsanitized into an interpreted
+context: SQL queries, shell commands, template engines, HTML, eval, deserialization.
 
-**Patterns to look for in a diff:**
-- New `uses: owner/action@v1` (tag-based) instead of `uses: owner/action@<full-sha>`
-- New `curl | bash` or `wget | sh` pattern
-- New npm/pip/brew dependency added without a comment on why it's trusted
-- A plugin install referencing a branch instead of a released version
-
-**Bad:**
-```yaml
-- uses: actions/checkout@v4
-```
-
-**Good:**
-```yaml
-- uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-```
+**Core question:** Can an attacker control execution by crafting malicious input?
 
 ---
 
-## SCOPE — Path and Filesystem Scope
+## EXPOSE — Information Disclosure
 
-**Description:** Scripts that write files outside their expected working directory,
-or that accept user-provided paths without validation, enabling unintended writes
-or path traversal.
+Sensitive data (credentials, PII, internal paths, stack traces, system details)
+returned to callers or written to logs where it shouldn't be accessible.
 
-**Patterns to look for in a diff:**
-- `cp` or `mv` or `mkdir` using a variable path without validation
-- Install script accepting a `--target` argument and using it directly without
-  confirming it stays within expected bounds
-- Symlink creation that could point outside the repo
-- `REPO_ROOT` computed incorrectly (relative path instead of absolute)
-
-**Bad:**
-```bash
-target="$1"
-cp template.sh "$target/scripts/setup.sh"  # no validation of $target
-```
-
-**Good:**
-```bash
-target="$(realpath "$1")"
-[[ "$target" == /Users/* ]] || { echo "ERROR: target must be under /Users/"; exit 1; }
-cp template.sh "$target/scripts/setup.sh"
-```
+**Core question:** Does output reveal information that helps an attacker or violates privacy?
 
 ---
 
-## CI — GitHub Actions Security
+## SUPPLY — Supply Chain
 
-**Description:** Workflow changes that expand permissions, introduce
-`pull_request_target` misuse, add broad `write` permissions, or expose secrets
-to untrusted code paths.
+Unverified, mutable, or potentially malicious external dependencies: packages,
+container images, GitHub Actions, scripts fetched at runtime.
 
-**Patterns to look for in a diff:**
-- New `pull_request_target` trigger (dangerous — runs with write access on PRs from forks)
-- `permissions: write-all` or removal of a `permissions:` block that was previously scoping access
-- New `secrets.*` reference in a context reachable by fork PRs
-- `GITHUB_TOKEN` granted `write` permission to resources it didn't have before
-- New workflow that runs on `push` to main with no branch protection check
+**Core question:** Could a dependency be compromised or swapped without detection?
 
-**Bad:**
-```yaml
-on:
-  pull_request_target:
-    types: [opened]
-permissions: write-all
-```
+---
 
-**Good:**
-```yaml
-on:
-  pull_request:
-    types: [opened]
-permissions:
-  contents: read
-  pull-requests: write
-```
+## SCOPE — Excessive Privilege / Boundary Violation
+
+Permissions, roles, or access scopes broader than needed; or operations that
+cross expected boundaries (filesystem paths, network, process, API scopes).
+
+**Core question:** Does this component have more access than it actually needs?
+
+---
+
+## CI — CI/CD Pipeline
+
+GitHub Actions workflow configuration that exposes secrets, uses unsafe triggers,
+lacks minimum permission declarations, or allows untrusted code to run with
+elevated access.
+
+**Core question:** Can a bad actor abuse the CI pipeline to exfiltrate secrets or
+execute arbitrary code?

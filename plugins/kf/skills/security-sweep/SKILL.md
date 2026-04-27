@@ -1,6 +1,6 @@
 ---
 name: security-sweep
-description: Retrospective security analysis of a PR or branch. Scans changed files for findings across seven categories, triages by severity, and creates beads tasks for remediation. Use after code is written to catch what proactive review missed.
+description: Retrospective security analysis of a PR or branch. Detects the project stack, loads matching finding patterns, scans changed files across seven categories, triages by severity, and creates beads tasks for remediation. Use after code is written to catch what proactive review missed.
 ---
 
 # Security Sweep
@@ -8,7 +8,35 @@ description: Retrospective security analysis of a PR or branch. Scans changed fi
 Retrospective security analysis of a PR or branch. Run after code is written — this
 complements the proactive design-time review in `kf:secure-sdlc`.
 
-## Step 1 — Establish scope
+## Step 1 — Detect stack and load patterns
+
+Probe the project to identify which stack files to load:
+
+```bash
+# Run these in parallel
+ls package.json 2>/dev/null && cat package.json | grep -E '"react-native"|"expo"'
+ls requirements.txt pyproject.toml setup.py Pipfile 2>/dev/null | head -1
+ls go.mod 2>/dev/null
+ls Gemfile 2>/dev/null
+find . -name "*.sh" -not -path "./.git/*" | wc -l
+```
+
+| Signal | Stack file(s) to load |
+|--------|----------------------|
+| `package.json` + `react-native` or `expo` dep | `stacks/react-native.md` + `stacks/node-typescript.md` |
+| `package.json` (no React Native) | `stacks/node-typescript.md` |
+| `requirements.txt` / `pyproject.toml` / `setup.py` | `stacks/python.md` |
+| `go.mod` | `stacks/generic.md` (no Go-specific file yet) |
+| `Gemfile` | `stacks/generic.md` (no Ruby-specific file yet) |
+| Significant `.sh` files (≥ 3) | `stacks/bash-scripts.md` |
+| No match | `stacks/generic.md` |
+
+Multiple files can apply — load all that match. A Python service with deployment
+scripts loads both `stacks/python.md` and `stacks/bash-scripts.md`.
+
+Always load `references/finding-categories.md` first for the universal category framework.
+
+## Step 2 — Establish scope
 
 Identify what to scan:
 
@@ -22,28 +50,18 @@ git diff --name-only <base>..<head>
 
 If the user names a PR number: `gh pr diff <n> --name-only`
 
-## Step 2 — Scan by category
+## Step 3 — Scan by category
 
-Load `references/finding-categories.md` for the full category definitions, bad/good
-examples, and detection patterns. Scan each changed file for:
-
-| Category | What to look for |
-|----------|-----------------|
-| **CRED** | Hardcoded credentials, tokens, or keys |
-| **AUTH** | Missing/bypassable auth checks, insecure session handling |
-| **INJECT** | SQL/command/template injection, unsanitized user input |
-| **EXPOSE** | Sensitive data in logs, error messages, or API responses |
-| **SUPPLY** | Unpinned dependencies, untrusted packages, mutable action tags |
-| **SCOPE** | Over-privileged IAM roles, excessive API scopes |
-| **CI** | Unsafe workflow triggers, missing permissions, secret exposure in logs |
+Using the loaded stack pattern file(s), scan each changed file for findings across
+the seven categories: CRED, AUTH, INJECT, EXPOSE, SUPPLY, SCOPE, CI.
 
 For each finding, note:
 - File and line number
 - Category
 - Brief description of the risk
-- Suggested remediation
+- Suggested remediation (reference the specific stack pattern where applicable)
 
-## Step 3 — Triage findings
+## Step 4 — Triage findings
 
 Load `references/triage-guide.md` for full P0/P1/P2 criteria.
 
@@ -52,7 +70,7 @@ Quick reference:
 - **P1** — Significant risk, exploitable under realistic conditions → fix before merge
 - **P2** — Defense-in-depth gap, low likelihood → file a task, can merge
 
-## Step 4 — Create beads tasks
+## Step 5 — Create beads tasks
 
 For P0 and P1 findings, create a task before reporting:
 
@@ -67,12 +85,13 @@ Fix: <remediation steps>" \
   --priority=<0 for P0, 1 for P1, 2 for P2>
 ```
 
-## Step 5 — Output sweep report
+## Step 6 — Output sweep report
 
 ```markdown
 ## Security Sweep — <branch or PR> — <date>
 
-**Scope:** <files scanned count> files changed
+**Stack detected:** <node-typescript | python | react-native | bash-scripts | generic>
+**Scope:** <N> files changed
 
 ### Findings
 
@@ -94,5 +113,18 @@ If no findings are identified, output:
 
 ```
 Security sweep complete — no findings in <N> changed files.
+Stack: <detected stack(s)>
 Safe to merge from a security standpoint.
 ```
+
+## Adding stack support
+
+If the project uses a stack with no matching file (Go, Ruby, Rust, etc.):
+1. Load `stacks/generic.md` for this sweep
+2. File a beads improvement issue to add a dedicated stack file:
+   ```bash
+   bd create \
+     --title="[Improvement] Add <stack> stack file for security-sweep" \
+     --description="security-sweep/references/stacks/<stack>.md needed. Generic patterns used in the interim." \
+     --type=task --priority=3
+   ```
