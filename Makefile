@@ -4,19 +4,10 @@
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  %-20s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-plugin-release: ## Sync skills, bump patch version, commit, and push (version=x.y.z, task=adp-xxx)
-	@if [ -n "$(version)" ]; then \
-		node -e "const f='plugins/kf/.claude-plugin/plugin.json'; const p=JSON.parse(require('fs').readFileSync(f,'utf8')); p.version='$(version)'; require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n'); console.log('Version set to $(version)')"; \
-		node scripts/generate-plugin-skills.js; \
-	else \
-		node scripts/generate-plugin-skills.js --bump; \
-	fi
+plugin-release: ## Sync skills into plugins/kf/ and push (version bumps handled by release-please)
+	node scripts/generate-plugin-skills.js
 	git add plugins/kf/
-	@if [ -n "$(task)" ]; then \
-		git diff --cached --quiet || git commit -m "chore: sync plugin skills and bump version\n\nBeads: $(task)\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"; \
-	else \
-		git diff --cached --quiet || git commit -m "chore: sync plugin skills and bump version\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"; \
-	fi
+	git diff --cached --quiet || git commit -m "chore: sync plugin skills\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 	git push
 
 bd-close: ## Close a beads issue and its linked GitHub issue (id=adp-xxx, reason="...")
